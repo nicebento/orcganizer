@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { generateQuestBoardName } from "./utils/names";
 import Board from "./components/Board";
 import TaskModal from "./components/TaskModal";
+import PriorityStars from "./components/PriorityStars";
 
 export default function App() {
   // Wizard: 0 Welcome → 2 Name → 25 First Task → 3 Boards
@@ -17,6 +18,15 @@ export default function App() {
   const [modalMode, setModalMode] = useState("edit"); // "edit" | "create"
   const [modalTask, setModalTask] = useState(null);
   const [modalCtx, setModalCtx] = useState(null); // { boardId, colId }
+
+  // Step 2.5 (first task) local draft state
+  const [firstTask, setFirstTask] = useState({
+    title: "",
+    notes: "",
+    priority: 0,
+    taskType: "sub", // "main" | "sub"
+    icon: "sword",
+  });
 
   /* ----------------------------- Wizard ----------------------------- */
   const handleGenerateName = () => {
@@ -44,22 +54,35 @@ export default function App() {
     setStep(25);
   };
 
-  const addDraftTaskToBoard = (title, notes = "") => {
+  // Overloaded: pass string/notes OR a full object
+  const addDraftTaskToBoard = (titleOrObj, notes = "") => {
     if (!boards.length) {
       setStep(3);
       return;
     }
     const firstId = boards[0].id;
+
+    const fromObj =
+      typeof titleOrObj === "object"
+        ? titleOrObj
+        : {
+            title: titleOrObj,
+            notes,
+            priority: 0,
+            taskType: "sub",
+            icon: "sword",
+          };
+
     setBoards((bs) =>
       bs.map((b) => {
         if (b.id !== firstId) return b;
         const t = {
           id: `t-${Date.now()}`,
-          title,
-          notes,
-          priority: 0,
-          taskType: "sub",
-          icon: "sword",
+          title: fromObj.title || "",
+          notes: fromObj.notes || "",
+          priority: Number(fromObj.priority) || 0,
+          taskType: fromObj.taskType || "sub",
+          icon: fromObj.icon || "sword",
           patternSeed: Math.random().toString(36).slice(2, 8),
         };
         return {
@@ -84,7 +107,7 @@ export default function App() {
     return null;
   }
 
-  // ✅ YOUR merged updater (prevents field resets)
+  // ✅ Updater merges task fields
   function updateTask(boardId, colId, taskId, updater) {
     setBoards((bs) =>
       bs.map((b) => {
@@ -95,7 +118,7 @@ export default function App() {
             if (t.id !== taskId) return t;
             if (typeof updater === "function") {
               const up = updater(t) || {};
-              return { ...t, ...up }; // MERGE result
+              return { ...t, ...up };
             }
             return { ...t, ...updater };
           });
@@ -151,34 +174,13 @@ export default function App() {
     }
   }
 
-  /* ---- Card move handler (from Column via CustomEvent with insertAt) --- */
-  useEffect(() => {
-    function onMove(e) {
-      const { boardId, fromColId, toColId, cardId, insertAt } = e.detail || {};
-      if (!boardId || !fromColId || !toColId || !cardId) return;
-      setBoards((bs) =>
-        bs.map((b) => {
-          if (b.id !== boardId) return b;
-          const cols = b.columns.map((c) => ({ ...c, cards: [...c.cards] }));
-          const from = cols.find((c) => c.id === fromColId);
-          const to = cols.find((c) => c.id === toColId);
-          const i = from.cards.findIndex((t) => t.id === cardId);
-          if (i < 0) return b;
-          const [moving] = from.cards.splice(i, 1);
-          const pos = Math.max(0, Math.min(insertAt, to.cards.length));
-          to.cards.splice(pos, 0, moving);
-          return { ...b, columns: cols };
-        })
-      );
-    }
-    window.addEventListener("orckanban-move-card", onMove);
-    return () => window.removeEventListener("orckanban-move-card", onMove);
-  }, []);
-
   /* -------------------------------- UI -------------------------------- */
   return (
     <div className="min-h-screen">
-      <header className="px-6 py-4 border-b border-neutral-800 sticky top-0 bg-neutral-950/80 backdrop-blur flex items-center justify-between">
+      <header
+        className="px-6 py-4 border-b border-neutral-800 fixed top-0 left-0 right-0 z-[100] bg-neutral-950/80 backdrop-blur flex items-center justify-between"
+        style={{ height: "var(--global-header-h)" }}
+      >
         <h1 className="text-2xl font-extrabold tracking-tight">
           Orcganizer — <span className="text-emerald-400">Quest boards</span>
         </h1>
@@ -212,7 +214,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className="p-6 max-w-6xl mx-auto space-y-6">
+      <main
+        className="p-6 max-w-6xl mx-auto space-y-6"
+        style={{ paddingTop: "calc(var(--global-header-h) + 8px)" }}
+      >
         {/* Step 0 — Welcome */}
         {step === 0 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-8 shadow text-center space-y-4">
@@ -230,10 +235,23 @@ export default function App() {
           </section>
         )}
 
-        {/* Step 2 — Name board */}
+        {/* Step 2 — Name board (with Back) */}
         {step === 2 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 shadow space-y-4">
-            <h2 className="text-xl font-semibold">Name your Quest board</h2>
+            <div className="flex items-center gap-3">
+              <button
+                className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
+                onClick={() => setStep(0)}
+                title="Back"
+                aria-label="Back"
+              >
+                ←
+              </button>
+              <h2 className="text-xl font-semibold m-0">
+                Name your Quest board
+              </h2>
+            </div>
+
             <div className="flex gap-2">
               <input
                 value={boardName}
@@ -252,40 +270,112 @@ export default function App() {
               </button>
             </div>
             {nameError && <p className="text-red-400 text-sm">{nameError}</p>}
-            <button
-              onClick={handleForge}
-              disabled={!boardName.trim()}
-              className={`px-4 py-2 rounded-xl font-medium shadow ${
-                boardName.trim()
-                  ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-                  : "bg-neutral-800 cursor-not-allowed border border-neutral-700"
-              }`}
-            >
-              Forge Quest board
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleForge}
+                disabled={!boardName.trim()}
+                className={`px-4 py-2 rounded-xl font-medium shadow ${
+                  boardName.trim()
+                    ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                    : "bg-neutral-800 cursor-not-allowed border border-neutral-700"
+                }`}
+              >
+                Forge Quest board
+              </button>
+            </div>
           </section>
         )}
 
-        {/* Step 2.5 — Create first task (quick) */}
+        {/* Step 2.5 — Create first task (full mini form) */}
         {step === 25 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 shadow space-y-4">
-            <h2 className="text-xl font-semibold">Create your first task</h2>
-            <input
-              className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
-              placeholder="Task title (press Enter to add)"
-              onKeyDown={(e) => {
-                const v = e.currentTarget.value.trim();
-                if (e.key === "Enter" && v) {
-                  addDraftTaskToBoard(v);
+            <div className="flex items-center gap-3">
+              <button
+                className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
+                onClick={() => setStep(2)}
+                title="Back"
+                aria-label="Back"
+              >
+                ←
+              </button>
+              <h2 className="text-xl font-semibold m-0">
+                Create your first task
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
+                placeholder="Task title"
+                value={firstTask.title}
+                onChange={(e) =>
+                  setFirstTask((t) => ({ ...t, title: e.target.value }))
                 }
-              }}
+              />
+              <div className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700">
+                <label className="text-xs block mb-1 text-neutral-400">
+                  Priority
+                </label>
+                <PriorityStars
+                  value={firstTask.priority}
+                  onChange={(v) => setFirstTask((t) => ({ ...t, priority: v }))}
+                />
+              </div>
+
+              <select
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
+                value={firstTask.taskType}
+                onChange={(e) =>
+                  setFirstTask((t) => ({ ...t, taskType: e.target.value }))
+                }
+              >
+                <option value="main">Main task</option>
+                <option value="sub">Sub task</option>
+              </select>
+
+              <select
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
+                value={firstTask.icon}
+                onChange={(e) =>
+                  setFirstTask((t) => ({ ...t, icon: e.target.value }))
+                }
+              >
+                <option value="sword">🗡️ sword</option>
+                <option value="shield">🛡️ shield</option>
+                <option value="scroll">📜 scroll</option>
+                <option value="potion">🧪 potion</option>
+                <option value="star">⭐ star</option>
+              </select>
+            </div>
+
+            <textarea
+              className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
+              placeholder="Describe task"
+              rows={4}
+              value={firstTask.notes}
+              onChange={(e) =>
+                setFirstTask((t) => ({ ...t, notes: e.target.value }))
+              }
             />
+
             <div className="flex gap-2">
               <button
-                onClick={() => setStep(3)}
                 className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
+                onClick={() => setStep(3)}
               >
                 Skip
+              </button>
+              <button
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white"
+                disabled={!firstTask.title.trim()}
+                onClick={() => {
+                  addDraftTaskToBoard({
+                    ...firstTask,
+                    title: firstTask.title.trim(),
+                  });
+                }}
+              >
+                Create & Continue
               </button>
             </div>
           </section>
@@ -319,7 +409,7 @@ export default function App() {
                     icon: "sword",
                     patternSeed: Math.random().toString(36).slice(2, 8),
                   });
-                  setModalCtx(ctx); // { boardId, colId }
+                  setModalCtx(ctx);
                   setModalOpen(true);
                 }}
                 onUpdateTask={(boardId, colId, taskId, patch) =>

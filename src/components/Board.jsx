@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React from "react";
 import Column from "./Column";
-import { DragDropContext, Droppable } from "react-beautiful-dnd";
+import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd"; // or "@hello-pangea/dnd"
 
 export default function Board({
   board,
@@ -13,10 +13,8 @@ export default function Board({
   onDeleteTask,
   onPrintTask,
 }) {
-  /* --------- board-level drag to reorder boards (vertical) ---------- */
-  const [dragBoard, setDragBoard] = useState(null);
+  /* HTML5 board drag: header is the handle; whole shell accepts drop */
   const onBoardDragStart = (e) => {
-    setDragBoard(board.id);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", board.id);
   };
@@ -26,12 +24,11 @@ export default function Board({
   };
   const onBoardDrop = (e) => {
     e.preventDefault();
-    const dragged = dragBoard;
-    setDragBoard(null);
-    if (!dragged || dragged === board.id) return;
+    const draggedId = e.dataTransfer.getData("text/plain");
+    if (!draggedId || draggedId === board.id) return;
     setBoards((bs) => {
       const list = [...bs];
-      const from = list.findIndex((b) => b.id === dragged);
+      const from = list.findIndex((b) => b.id === draggedId);
       const to = list.findIndex((b) => b.id === board.id);
       if (from === -1 || to === -1) return bs;
       const [moving] = list.splice(from, 1);
@@ -46,13 +43,26 @@ export default function Board({
     );
   };
 
-  /* -------------------- react-beautiful-dnd handler ------------------ */
+  const onRenameColumn = (boardId, colId, newTitle) => {
+    setBoards((bs) =>
+      bs.map((b) =>
+        b.id === boardId
+          ? {
+              ...b,
+              columns: b.columns.map((c) =>
+                c.id === colId ? { ...c, title: newTitle } : c
+              ),
+            }
+          : b
+      )
+    );
+  };
+
   const onDragEnd = (result) => {
     const { source, destination, type } = result;
     if (!destination) return;
 
     if (type === "COLUMN") {
-      // reorder columns inside this board
       setBoards((bs) =>
         bs.map((b) => {
           if (b.id !== board.id) return b;
@@ -66,11 +76,9 @@ export default function Board({
     }
 
     if (type === "CARD") {
-      // move/reorder cards between columns in this board
       setBoards((bs) =>
         bs.map((b) => {
           if (b.id !== board.id) return b;
-
           const cols = b.columns.map((c) => ({ ...c, cards: [...c.cards] }));
           const fromColIdx = cols.findIndex((c) => c.id === source.droppableId);
           const toColIdx = cols.findIndex(
@@ -80,7 +88,6 @@ export default function Board({
 
           const fromCards = cols[fromColIdx].cards;
           const toCards = cols[toColIdx].cards;
-
           const [movedCard] = fromCards.splice(source.index, 1);
           toCards.splice(destination.index, 0, movedCard);
 
@@ -96,34 +103,40 @@ export default function Board({
   return (
     <div
       className="rounded-2xl border border-neutral-800 bg-neutral-900/80 shadow"
-      draggable
-      onDragStart={onBoardDragStart}
       onDragOver={onBoardDragOver}
       onDrop={onBoardDrop}
     >
-      {/* Minimized board → single title bar */}
       {board.minimized ? (
-        <button
-          className="w-full text-left px-4 py-3 text-neutral-300 hover:text-white"
+        <div
+          className="sticky top-0 z-40 w-full text-left px-4 py-3 text-neutral-300 hover:text-white cursor-grab active:cursor-grabbing bg-neutral-900/80 backdrop-blur border-b border-neutral-800"
+          draggable
+          onDragStart={onBoardDragStart}
+          title="Drag to reorder boards • Click to expand"
           onClick={toggleBoardMin}
-          title="Expand board"
         >
           {board.name}
-        </button>
+        </div>
       ) : (
         <>
-          {/* Board header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
-            <div className="font-semibold">{board.name}</div>
+          {/* Sticky board header (also the board drag handle) */}
+          <div
+            className="sticky top-0 z-40 flex items-center justify-between px-4 py-3 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur cursor-grab active:cursor-grabbing"
+            draggable
+            onDragStart={onBoardDragStart}
+            title="Drag to reorder boards"
+          >
+            <div className="font-semibold cursor-default">{board.name}</div>
             <button
-              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700"
-              onClick={toggleBoardMin}
+              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleBoardMin();
+              }}
             >
               Minimize Board
             </button>
           </div>
 
-          {/* Columns (now DnD-enabled) */}
           <div className="p-4 overflow-x-auto pb-2">
             <DragDropContext onDragEnd={onDragEnd}>
               <Droppable
@@ -138,18 +151,41 @@ export default function Board({
                     {...provided.droppableProps}
                   >
                     {board.columns.map((col, index) => (
-                      <Column
+                      <Draggable
                         key={col.id}
-                        boardId={board.id}
-                        column={col}
-                        index={index} // ✅ just the prop, no JSX comment
-                        onOpenTask={onOpenTask}
-                        onCreateTask={onCreateTask}
-                        onUpdateTask={onUpdateTask}
-                        onDeleteTask={onDeleteTask}
-                        onPrintTask={onPrintTask}
-                      />
+                        draggableId={`column-${col.id}`}
+                        index={index}
+                      >
+                        {(dragProvided, dragSnapshot) => (
+                          <div
+                            ref={dragProvided.innerRef}
+                            {...dragProvided.draggableProps}
+                            style={{
+                              ...dragProvided.draggableProps.style,
+                              zIndex: dragSnapshot.isDragging ? 1000 : "auto",
+                              position: dragSnapshot.isDragging
+                                ? "relative"
+                                : undefined,
+                            }}
+                            className="min-w-[320px]"
+                          >
+                            <Column
+                              boardId={board.id}
+                              column={col}
+                              index={index}
+                              colDragHandleProps={dragProvided.dragHandleProps}
+                              onOpenTask={onOpenTask}
+                              onCreateTask={onCreateTask}
+                              onUpdateTask={onUpdateTask}
+                              onDeleteTask={onDeleteTask}
+                              onPrintTask={onPrintTask}
+                              onRenameColumn={onRenameColumn}
+                            />
+                          </div>
+                        )}
+                      </Draggable>
                     ))}
+
                     {provided.placeholder}
 
                     {/* Add column */}
