@@ -7,8 +7,8 @@ import ConfirmDialog from "./ConfirmDialog";
 export default function TaskCard({
   card,
   colId,
+  isDragging = false, // <-- NEW
   onOpen,
-  onDragStart,
   onToggleMinimize,
   onPrintTask,
   onDelete,
@@ -20,6 +20,7 @@ export default function TaskCard({
   const taskTypeLabel = card.taskType === "main" ? "Main task" : "Sub task";
 
   const handleRootClick = () => {
+    if (isDragging) return; // <-- ignore clicks when dragging
     if (isMin) onToggleMinimize?.(card.id, colId);
     else onOpen?.(card);
   };
@@ -28,20 +29,12 @@ export default function TaskCard({
     <>
       <div
         className="rounded-ticket border border-neutral-700 shadow-sm overflow-hidden bg-white cursor-pointer select-none"
-        draggable={!isMin}
-        onDragStart={(e) => {
-          if (!isMin) {
-            onDragStart?.(e, card.id);
-            e.stopPropagation(); // don’t bubble to column header
-          }
-        }}
         onClick={handleRootClick}
         data-card
       >
         {/* HEADER */}
         <div className="relative bg-brandBlue-700 text-white px-3 py-3">
           <div className="flex items-center gap-3 pr-20">
-            {/* Bigger, centered icon */}
             <div className="flex items-center justify-center w-8 h-8 text-2xl leading-none">
               {iconGlyph(card.icon)}
             </div>
@@ -54,7 +47,6 @@ export default function TaskCard({
               </div>
             </div>
           </div>
-          {/* pattern swatch — flush to top/right/bottom */}
           <div
             className="pointer-events-none absolute top-0 right-0 h-full w-20 opacity-35"
             style={{
@@ -66,7 +58,6 @@ export default function TaskCard({
           />
         </div>
 
-        {/* BODY — show TASK TEXT (notes) instead of title */}
         {!isMin && (
           <div className="px-3 py-3 text-neutral-900">
             <div className="text-[16px] leading-6 whitespace-pre-wrap">
@@ -75,7 +66,6 @@ export default function TaskCard({
           </div>
         )}
 
-        {/* BLUE PRIORITY BAND */}
         {!isMin && (
           <div className="bg-brandBlue-700 text-white px-3 py-2">
             <div className="flex items-center justify-between">
@@ -88,7 +78,6 @@ export default function TaskCard({
           </div>
         )}
 
-        {/* BUTTONS BAR — green buttons */}
         {!isMin && (
           <div className="px-3 py-2 bg-white border-t border-neutral-200 flex gap-2">
             <button

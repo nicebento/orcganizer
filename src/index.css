@@ -40,3 +40,30 @@ body {
 button {
   cursor: pointer;
 }
+
+/* Make sure no ancestor applies transforms that offset the drag layer */
+#root,
+body,
+html {
+  height: 100%;
+}
+
+/* Optional: prevent weird cursor lag by avoiding transform on the dragging clone */
+.rbd-dragging {
+  transform: none !important;
+} /* use sparingly */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+:root {
+  --global-header-h: 64px; /* tweak if you want the header taller/shorter */
+}
+html,
+body,
+#root {
+  height: 100%;
+}
