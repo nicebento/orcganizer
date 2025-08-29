@@ -4,7 +4,6 @@ import IconPickerDropdown from "./IconPicker";
 import PriorityStars from "./PriorityStars";
 import ConfirmDialog from "./ConfirmDialog";
 
-/* tiny deterministic hash for dither */
 function hashSeed(s = "") {
   let h = 2166136261 >>> 0;
   for (let i = 0; i < s.length; i++) {
@@ -34,21 +33,21 @@ export default React.memo(function TaskCard({
   card,
   colId,
   isDragging = false,
-  dragHandleProps, // header is the drag handle
+  isDragClone = false, // 👈 used only for the portal clone
+  dragHandleProps,
   onToggleMinimize,
   onPrintTask,
   onDelete,
   onPriority,
   onIconChange,
-  onUpdate, // (id, patch)
-  onRerollPattern, // (id, {type})
+  onUpdate,
+  onRerollPattern,
 }) {
   const [askDelete, setAskDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingNotes, setEditingNotes] = useState(false);
   const isMin = !!card.minimized;
 
-  // leave edit modes when minimized
   useEffect(() => {
     if (isMin) {
       setEditingTitle(false);
@@ -64,62 +63,87 @@ export default React.memo(function TaskCard({
 
   const taskTypeLabel = card.taskType === "main" ? "Main quest" : "Sub quest";
 
-  // Clicking a minimized card expands it.
+  const glyph =
+    card.icon === "shield"
+      ? "🛡️"
+      : card.icon === "scroll"
+      ? "📜"
+      : card.icon === "potion"
+      ? "🧪"
+      : card.icon === "star"
+      ? "⭐"
+      : "🗡️";
+
+  const notesValue = card.notes || "";
+  const notesFont = isMin ? "text-lg leading-6" : "text-2xl leading-8";
+
   const handleCardClick = () => {
     if (isDragging) return;
     if (isMin) onToggleMinimize?.(card.id, colId);
   };
 
-  // Pattern click: if minimized, expand; else reroll pattern.
-  const handlePatternClick = (e) => {
-    e.stopPropagation();
-    if (isMin) {
-      onToggleMinimize?.(card.id, colId);
-      return;
-    }
-    const nextType = card.patternType === "dither" ? "default" : "dither";
-    onRerollPattern?.(card.id, { type: nextType });
-  };
-
   return (
     <>
       <div
-        className="rounded-ticket border border-neutral-700 shadow-sm overflow-hidden bg-white flex flex-col"
-        style={{ width: "70mm", height: isMin ? "auto" : "80mm" }}
+        className={`rounded-ticket ${
+          isDragClone
+            ? "border border-transparent"
+            : "border border-neutral-700"
+        } shadow-sm overflow-hidden bg-white flex flex-col`}
+        style={{
+          width: "70mm",
+          height: isMin ? "auto" : "80mm",
+          // eliminate seams on GPU
+          backgroundClip: "padding-box",
+          backfaceVisibility: "hidden",
+          WebkitBackfaceVisibility: "hidden",
+          transform: isDragClone ? "translateZ(0)" : undefined,
+          // no shadow here while dragging (shadow is on wrapper clone)
+          boxShadow: isDragClone ? "none" : undefined,
+        }}
         onClick={handleCardClick}
       >
         {/* HEADER (drag handle) */}
         <div
-          className={`relative bg-brandBlue-700 text-white ${
+          className={`relative text-white ${
             isMin ? "px-2.5 py-1.5" : "px-2.5 py-2"
-          } cursor-grab active:cursor-grabbing shrink-0`}
+          } cursor-grab active:cursor-grabbing shrink-0 rounded-t-[var(--radius-ticket)] overflow-hidden`}
           {...(dragHandleProps || {})}
           onClick={(e) => {
             if (!isMin) e.stopPropagation();
           }}
+          style={{ backgroundColor: "rgb(37 99 235)" }}
         >
+          {/* exact fit — prevents 1px glow */}
+          <div className="absolute inset-0 rounded-t-[var(--radius-ticket)] bg-[rgb(37,99,235)] pointer-events-none" />
           <div
-            className={`flex items-center gap-2 ${isMin ? "pr-10" : "pr-14"}`}
+            className={`relative z-10 flex items-center gap-2 ${
+              isMin ? "pr-10" : "pr-14"
+            }`}
           >
-            {/* Icon picker — disabled when minimized; header-themed */}
             <div
-              className={`flex items-center justify-center ${isMin ? "" : ""}`}
+              className="flex items-center justify-center"
               onMouseDown={(e) => {
                 if (!isMin) e.stopPropagation();
               }}
               onClick={(e) => {
                 if (!isMin) e.stopPropagation();
               }}
-              title="Change icon"
+              title={isMin ? "Task icon" : "Change icon"}
             >
-              <IconPickerDropdown
-                value={card.icon}
-                onChange={(key) => onIconChange?.(card.id, key)}
-                showLabel={false}
-                size="sm"
-                variant="header"
-                disabled={isMin} // 👈 no editing while minimized
-              />
+              {isMin ? (
+                <span className="text-lg" aria-hidden>
+                  {glyph}
+                </span>
+              ) : (
+                <IconPickerDropdown
+                  value={card.icon}
+                  onChange={(key) => onIconChange?.(card.id, key)}
+                  showLabel={false}
+                  size="sm"
+                  variant="header"
+                />
+              )}
             </div>
 
             <div className="leading-tight min-w-0">
@@ -129,12 +153,9 @@ export default React.memo(function TaskCard({
                 </div>
               )}
 
-              {/* Title: when minimized, clicking title should expand, not edit */}
               {editingTitle && !isMin ? (
                 <input
-                  className={`font-semibold -mt-0.5 bg-white/15 rounded px-1.5 py-0.5 outline-none ${
-                    isMin ? "w-[46mm]" : "w-[42mm]"
-                  }`}
+                  className="font-semibold -mt-0.5 bg-white/15 rounded px-1.5 py-0.5 outline-none w-[42mm]"
                   value={card.title || ""}
                   onChange={(e) =>
                     onUpdate?.(card.id, { title: e.target.value })
@@ -150,12 +171,11 @@ export default React.memo(function TaskCard({
                 />
               ) : (
                 <button
-                  className={`font-semibold -mt-0.5 truncate text-left hover:underline ${
+                  className={`font-semibold -mt-0.5 truncate text-left ${
                     isMin ? "max-w-[46mm]" : "w-[42mm]"
                   }`}
                   onClick={(e) => {
                     if (isMin) {
-                      // expand instead of editing
                       onToggleMinimize?.(card.id, colId);
                     } else {
                       e.stopPropagation();
@@ -173,56 +193,54 @@ export default React.memo(function TaskCard({
             </div>
           </div>
 
-          {/* CLICKABLE pattern swatch */}
-          <div
-            className="absolute top-0 right-0 h-full w-16 opacity-40 print:opacity-60"
+          {/* Pattern swatch (top-right) */}
+          <button
+            type="button"
+            className="absolute top-0 right-0 h-full w-10 opacity-40 print:opacity-60 rounded-tr-[var(--radius-ticket)]"
             style={{
               backgroundImage: headerPattern,
               backgroundSize: "200px 160px",
               backgroundRepeat: "no-repeat",
               backgroundPosition: "right top",
-              cursor: "pointer",
             }}
-            onClick={handlePatternClick}
-            title="Click to change pattern"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isMin) {
+                onToggleMinimize?.(card.id, colId);
+                return;
+              }
+              const next = card.patternType === "dither" ? "default" : "dither";
+              onRerollPattern?.(card.id, { type: next });
+            }}
+            title={isMin ? undefined : "Click to change pattern"}
           />
         </div>
 
-        {/* BODY (notes) — hidden when minimized */}
+        {/* BODY */}
         {!isMin && (
-          <div
-            className="px-2.5 py-2 text-neutral-900 flex-1 overflow-y-auto overflow-x-hidden"
-            style={{ minHeight: 0, display: "flex", flexDirection: "column" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setEditingNotes(true);
-            }}
-          >
-            {editingNotes ? (
-              <textarea
-                className="w-full px-2 py-2 rounded-lg bg-neutral-100 outline-none resize-none border-0"
-                style={{ flex: 1, minHeight: 0 }}
-                value={card.notes || ""}
-                onChange={(e) => onUpdate?.(card.id, { notes: e.target.value })}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onBlur={() => setEditingNotes(false)} // border goes away after done
-                placeholder="Describe the task..."
-                autoFocus
-              />
-            ) : (
-              <div className="text-[14px] leading-5 whitespace-pre-wrap select-text">
-                {card.notes && card.notes.trim().length
-                  ? card.notes
-                  : "Describe the task..."}
-              </div>
-            )}
+          <div className="flex-1 relative overflow-hidden">
+            <div
+              className={`h-full p-2.5 whitespace-pre-wrap select-text text-neutral-900 ${notesFont} break-words`}
+              style={{
+                overflow: "hidden",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingNotes(true);
+              }}
+            >
+              {notesValue && notesValue.trim().length
+                ? notesValue
+                : "Describe the task..."}
+            </div>
           </div>
         )}
 
-        {/* PRIORITY BAND */}
+        {/* PRIORITY */}
         {!isMin && (
-          <div className="bg-brandBlue-700 text-white px-2.5 py-1.5 shrink-0">
+          <div className="bg-[rgb(37,99,235)] text-white px-2.5 py-1.5 shrink-0">
             <div className="flex items-center justify-between">
               <span className="text-[11px]">PRIORITY</span>
               <PriorityStars
@@ -233,9 +251,9 @@ export default React.memo(function TaskCard({
           </div>
         )}
 
-        {/* ACTIONS — hidden when minimized */}
+        {/* ACTIONS */}
         {!isMin && (
-          <div className="px-2.5 py-1.5 bg-white border-t border-neutral-200 flex gap-1 flex-nowrap items-center shrink-0">
+          <div className="px-2.5 py-1.5 bg-white border-t border-neutral-200 flex gap-1 items-center">
             <button
               type="button"
               className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[11px] text-white"
@@ -270,7 +288,6 @@ export default React.memo(function TaskCard({
         )}
       </div>
 
-      {/* Full-screen dim confirm, centered */}
       <ConfirmDialog
         open={askDelete}
         title="Delete task"

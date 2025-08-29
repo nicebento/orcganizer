@@ -79,23 +79,31 @@ export default function IconPickerDropdown({
 
       {open && (
         <div
-          className={`absolute z-[200] mt-1 rounded-lg shadow-lg p-1 grid grid-cols-5 gap-1 ${menuClass}`}
+          className={`absolute z-[200] mt-1 rounded-lg shadow-lg ${menuClass}`}
+          style={{ minWidth: 160 }}
+          role="menu"
         >
-          {ICONS.map((icon) => (
-            <button
-              key={icon.key}
-              className="w-8 h-8 rounded hover:bg-white/10 text-xl grid place-items-center text-white"
-              title={icon.label}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onChange?.(icon.key);
-                setOpen(false);
-              }}
-            >
-              <span aria-hidden>{icon.glyph}</span>
-            </button>
-          ))}
+          <div className="py-1">
+            {ICONS.map((icon) => (
+              <button
+                key={icon.key}
+                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/10 text-white"
+                title={icon.label}
+                role="menuitem"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onChange?.(icon.key);
+                  setOpen(false);
+                }}
+              >
+                <span className="text-lg leading-none" aria-hidden>
+                  {icon.glyph}
+                </span>
+                <span className="text-sm">{icon.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
