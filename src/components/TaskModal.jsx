@@ -80,16 +80,16 @@ export default function TaskModal({
                   setLocal({ ...local, taskType: e.target.value })
                 }
               >
-                <option value="main">Main task</option>
-                <option value="sub">Sub task</option>
+                <option value="main">Main quest</option>
+                <option value="sub">Sub quest</option>
               </select>
             </label>
 
-            {/* Task (notes) */}
+            {/* Task (notes) — 2× bigger */}
             <label className="grid gap-1">
               <span className="text-sm text-neutral-600">Task</span>
               <textarea
-                className="px-3 py-2 rounded-lg bg-neutral-100 border border-neutral-300 outline-none min-h-[140px]"
+                className="px-3 py-2 rounded-lg bg-neutral-100 border border-neutral-300 outline-none min-h-[140px] text-2xl leading-8"
                 value={local.notes || ""}
                 onChange={(e) => setLocal({ ...local, notes: e.target.value })}
                 placeholder="Describe the task..."

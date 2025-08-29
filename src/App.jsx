@@ -1,34 +1,103 @@
-import React, { useState } from "react";
-import { generateQuestBoardName } from "./utils/names";
+import React, { useCallback, useEffect, useState } from "react";
+import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
 import Board from "./components/Board";
-import TaskModal from "./components/TaskModal";
 import PriorityStars from "./components/PriorityStars";
+import { generateQuestBoardName } from "./utils/names";
+import printTaskCard from "./utils/printTaskCard";
 
 export default function App() {
-  // Wizard: 0 Welcome → 2 Name → 25 First Task → 3 Boards
   const [step, setStep] = useState(0);
   const [boardName, setBoardName] = useState("");
   const [nameError, setNameError] = useState("");
-
-  // Boards (start empty)
   const [boards, setBoards] = useState([]);
 
-  // Task modal
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState("edit"); // "edit" | "create"
-  const [modalTask, setModalTask] = useState(null);
-  const [modalCtx, setModalCtx] = useState(null); // { boardId, colId }
+  const STORAGE_KEY = "orcganizer.boards.v3";
+  const LEGACY_KEYS = ["orcganizer.boards.v2", "orcganizer.boards.v1"];
 
-  // Step 2.5 (first task) local draft state
+  const hydrateBoards = (arr) =>
+    Array.isArray(arr)
+      ? arr.map((b, bi) => ({
+          id: b.id ?? `b-${Date.now()}-${bi}`,
+          name: b.name ?? "Untitled board",
+          minimized: !!b.minimized,
+          headerColor: b.headerColor ?? "", // NEW: per-board color
+          columns: Array.isArray(b.columns)
+            ? b.columns.map((c, ci) => ({
+                id: c.id ?? `col-${ci + 1}`,
+                title: c.title ?? `Column ${ci + 1}`,
+                color: c.color ?? "", // NEW: per-column header color
+                minimized: !!c.minimized, // NEW: column minimized
+                cards: Array.isArray(c.cards)
+                  ? c.cards.map((t, ti) => ({
+                      id: t.id ?? `t-${Date.now()}-${ci}-${ti}`,
+                      title: t.title ?? "",
+                      notes: t.notes ?? "",
+                      priority: Number(t.priority ?? 0) || 0,
+                      taskType: t.taskType === "main" ? "main" : "sub",
+                      icon: typeof t.icon === "string" ? t.icon : "sword",
+                      patternSeed:
+                        t.patternSeed ?? Math.random().toString(36).slice(2, 8),
+                      minimized: !!t.minimized,
+                    }))
+                  : [],
+              }))
+            : [],
+        }))
+      : [];
+
+  // load
+  useEffect(() => {
+    try {
+      let parsed = null;
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && Array.isArray(obj.boards)) parsed = obj.boards;
+      }
+      if (!parsed) {
+        for (const k of LEGACY_KEYS) {
+          const r = localStorage.getItem(k);
+          if (r) {
+            const maybe = JSON.parse(r);
+            if (Array.isArray(maybe)) {
+              parsed = maybe;
+              break;
+            }
+          }
+        }
+      }
+      const hydrated = hydrateBoards(parsed || []);
+      setBoards(hydrated);
+      if (hydrated.length) setStep(3);
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 3, boards: hydrated })
+      );
+      LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  // save
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 3, boards }));
+    } catch (e) {
+      console.error("save failed", e);
+    }
+  }, [boards]);
+
+  // first-task quick step
   const [firstTask, setFirstTask] = useState({
     title: "",
     notes: "",
     priority: 0,
-    taskType: "sub", // "main" | "sub"
+    taskType: "sub",
     icon: "sword",
   });
 
-  /* ----------------------------- Wizard ----------------------------- */
+  /* -------------------------- helpers -------------------------- */
   const handleGenerateName = () => {
     const name = generateQuestBoardName(boardName);
     setBoardName(name);
@@ -44,137 +113,191 @@ export default function App() {
       id: `b-${Date.now()}`,
       name: boardName.trim(),
       minimized: false,
+      headerColor: "",
       columns: [
-        { id: "todo", title: "To Do", cards: [] },
-        { id: "doing", title: "Doing", cards: [] },
-        { id: "done", title: "Done", cards: [] },
+        { id: "todo", title: "To Do", cards: [], color: "", minimized: false },
+        { id: "doing", title: "Doing", cards: [], color: "", minimized: false },
+        { id: "done", title: "Done", cards: [], color: "", minimized: false },
       ],
     };
     setBoards((bs) => [newBoard, ...bs]);
     setStep(25);
   };
 
-  // Overloaded: pass string/notes OR a full object
-  const addDraftTaskToBoard = (titleOrObj, notes = "") => {
-    if (!boards.length) {
-      setStep(3);
-      return;
-    }
-    const firstId = boards[0].id;
-
-    const fromObj =
-      typeof titleOrObj === "object"
-        ? titleOrObj
-        : {
-            title: titleOrObj,
-            notes,
-            priority: 0,
-            taskType: "sub",
-            icon: "sword",
-          };
-
-    setBoards((bs) =>
-      bs.map((b) => {
-        if (b.id !== firstId) return b;
-        const t = {
-          id: `t-${Date.now()}`,
-          title: fromObj.title || "",
-          notes: fromObj.notes || "",
-          priority: Number(fromObj.priority) || 0,
-          taskType: fromObj.taskType || "sub",
-          icon: fromObj.icon || "sword",
-          patternSeed: Math.random().toString(36).slice(2, 8),
-        };
-        return {
-          ...b,
-          columns: b.columns.map((c) =>
-            c.id === "todo" ? { ...c, cards: [t, ...c.cards] } : c
-          ),
-        };
-      })
-    );
+  const addDraftTaskToBoard = (obj) => {
+    setBoards((bs) => {
+      if (!bs.length) return bs;
+      const firstId = bs[0].id;
+      return bs.map((b) =>
+        b.id === firstId
+          ? {
+              ...b,
+              columns: b.columns.map((c) =>
+                c.id === "todo"
+                  ? {
+                      ...c,
+                      cards: [
+                        {
+                          id: `t-${Date.now()}`,
+                          title: obj.title || "",
+                          notes: obj.notes || "",
+                          priority: Number(obj.priority) || 0,
+                          taskType: obj.taskType || "sub",
+                          icon: obj.icon || "sword",
+                          patternSeed: Math.random().toString(36).slice(2, 8),
+                        },
+                        ...c.cards,
+                      ],
+                    }
+                  : c
+              ),
+            }
+          : b
+      );
+    });
     setStep(3);
   };
 
-  /* -------------------------- Task helpers -------------------------- */
-  function findTask(taskId) {
-    for (const b of boards) {
-      for (const c of b.columns) {
-        const t = c.cards.find((x) => x.id === taskId);
-        if (t) return { boardId: b.id, colId: c.id, task: t };
-      }
-    }
-    return null;
-  }
-
-  // ✅ Updater merges task fields
-  function updateTask(boardId, colId, taskId, updater) {
+  const updateTask = useCallback((boardId, colId, taskId, updater) => {
     setBoards((bs) =>
       bs.map((b) => {
         if (b.id !== boardId) return b;
-        const columns = b.columns.map((c) => {
-          if (c.id !== colId) return c;
-          const cards = c.cards.map((t) => {
-            if (t.id !== taskId) return t;
-            if (typeof updater === "function") {
-              const up = updater(t) || {};
-              return { ...t, ...up };
-            }
-            return { ...t, ...updater };
-          });
-          return { ...c, cards };
-        });
-        return { ...b, columns };
+        return {
+          ...b,
+          columns: b.columns.map((c) => {
+            if (c.id !== colId) return c;
+            return {
+              ...c,
+              cards: c.cards.map((t) => {
+                if (t.id !== taskId) return t;
+                if (typeof updater === "function") {
+                  const up = updater(t) || {};
+                  return { ...t, ...up };
+                }
+                return { ...t, ...updater };
+              }),
+            };
+          }),
+        };
       })
     );
-  }
+  }, []);
 
-  function deleteTask(boardId, taskId) {
+  const createTask = useCallback(({ boardId, colId }) => {
     setBoards((bs) =>
-      bs.map((b) => ({
-        ...b,
-        columns: b.columns.map((c) => ({
-          ...c,
-          cards: c.cards.filter((t) => t.id !== taskId),
-        })),
-      }))
+      bs.map((b) =>
+        b.id === boardId
+          ? {
+              ...b,
+              columns: b.columns.map((c) =>
+                c.id === colId
+                  ? {
+                      ...c,
+                      cards: [
+                        {
+                          id: `t-${Date.now()}`,
+                          title: "New task",
+                          notes: "",
+                          priority: 0,
+                          taskType: "sub",
+                          icon: "sword",
+                          patternSeed: Math.random().toString(36).slice(2, 8),
+                        },
+                        ...c.cards,
+                      ],
+                    }
+                  : c
+              ),
+            }
+          : b
+      )
     );
-  }
+  }, []);
 
-  /* -------------------------- Print single -------------------------- */
-  function printTask(task) {
-    const esc = (s) =>
-      String(s).replace(
-        /[&<>"']/g,
-        (c) =>
-          ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            '"': "&quot;",
-            "'": "&#39;",
-          }[c])
-      );
-    const html = `<!doctype html>
-<html><head><meta charset="utf-8"/><title>Print Task</title>
-<style>
-  @page { margin: 16mm; } body { font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:#0a0a0a; }
-  h1 { margin:0 0 8px; font-size:28px; } .notes{white-space:pre-wrap;}
-</style></head><body>
-  <h1>${esc(task.title || "Task")}</h1>
-  <div>Priority: ${task.priority || 0} / 5</div>
-  ${task.notes ? `<div class="notes">${esc(task.notes)}</div>` : ""}
-  <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();};</script>
-</body></html>`;
-    const w = window.open("", "_blank", "noopener,noreferrer");
-    if (w) {
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
+  const deleteTask = useCallback((boardId, colId, taskId) => {
+    setBoards((bs) =>
+      bs.map((b) =>
+        b.id === boardId
+          ? {
+              ...b,
+              columns: b.columns.map((c) =>
+                c.id === colId
+                  ? { ...c, cards: c.cards.filter((t) => t.id !== taskId) }
+                  : c
+              ),
+            }
+          : b
+      )
+    );
+  }, []);
+
+  /* ----------------------------- DnD ----------------------------- */
+  const onDragEnd = ({ source, destination, type }) => {
+    if (!destination) return;
+
+    // boards
+    if (type === "BOARD") {
+      setBoards((bs) => {
+        const next = [...bs];
+        const [moved] = next.splice(source.index, 1);
+        next.splice(destination.index, 0, moved);
+        return next;
+      });
+      return;
     }
-  }
 
-  /* -------------------------------- UI -------------------------------- */
+    // columns (within same board)
+    if (type === "COLUMN") {
+      const fromBoardId = String(source.droppableId).replace("cols-", "");
+      const toBoardId = String(destination.droppableId).replace("cols-", "");
+      if (fromBoardId !== toBoardId) return;
+      setBoards((bs) =>
+        bs.map((b) => {
+          if (b.id !== fromBoardId) return b;
+          const cols = [...b.columns];
+          const [moved] = cols.splice(source.index, 1);
+          cols.splice(destination.index, 0, moved);
+          return { ...b, columns: cols };
+        })
+      );
+      return;
+    }
+
+    // cards (across boards/columns)
+    if (type === "CARD") {
+      const [fromBoardId, fromColId] = String(source.droppableId).split(":");
+      const [toBoardId, toColId] = String(destination.droppableId).split(":");
+      setBoards((bs) => {
+        const next = bs.map((b) => ({
+          ...b,
+          columns: b.columns.map((c) => ({ ...c, cards: [...c.cards] })),
+        }));
+        const fromBoard = next.find((b) => b.id === fromBoardId);
+        const toBoard = next.find((b) => b.id === toBoardId);
+        if (!fromBoard || !toBoard) return bs;
+        const fromCol = fromBoard.columns.find((c) => c.id === fromColId);
+        const toCol = toBoard.columns.find((c) => c.id === toColId);
+        if (!fromCol || !toCol) return bs;
+        const [movedCard] = fromCol.cards.splice(source.index, 1);
+        toCol.cards.splice(destination.index, 0, movedCard);
+        return next;
+      });
+    }
+  };
+
+  const resetAll = () => {
+    if (!window.confirm("Reset all boards & quests? This clears local data."))
+      return;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+    } catch {}
+    setBoards([]);
+    setBoardName("");
+    setNameError("");
+    setStep(0);
+  };
+
   return (
     <div className="min-h-screen">
       <header
@@ -198,10 +321,29 @@ export default function App() {
                   id: `b-${Date.now()}`,
                   name: "New Quest board",
                   minimized: false,
+                  headerColor: "",
                   columns: [
-                    { id: "todo", title: "To Do", cards: [] },
-                    { id: "doing", title: "Doing", cards: [] },
-                    { id: "done", title: "Done", cards: [] },
+                    {
+                      id: "todo",
+                      title: "To Do",
+                      cards: [],
+                      color: "",
+                      minimized: false,
+                    },
+                    {
+                      id: "doing",
+                      title: "Doing",
+                      cards: [],
+                      color: "",
+                      minimized: false,
+                    },
+                    {
+                      id: "done",
+                      title: "Done",
+                      cards: [],
+                      color: "",
+                      minimized: false,
+                    },
                   ],
                 },
                 ...bs,
@@ -211,6 +353,12 @@ export default function App() {
           >
             New Board
           </button>
+          <button
+            onClick={resetAll}
+            className="px-3 py-2 rounded-lg bg-red-700 hover:bg-red-600 text-white"
+          >
+            Reset Data
+          </button>
         </div>
       </header>
 
@@ -218,7 +366,6 @@ export default function App() {
         className="p-6 max-w-6xl mx-auto space-y-6"
         style={{ paddingTop: "calc(var(--global-header-h) + 8px)" }}
       >
-        {/* Step 0 — Welcome */}
         {step === 0 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-8 shadow text-center space-y-4">
             <h2 className="text-2xl font-bold">Welcome to your Quest board</h2>
@@ -235,15 +382,12 @@ export default function App() {
           </section>
         )}
 
-        {/* Step 2 — Name board (with Back) */}
         {step === 2 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 shadow space-y-4">
             <div className="flex items-center gap-3">
               <button
                 className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
                 onClick={() => setStep(0)}
-                title="Back"
-                aria-label="Back"
               >
                 ←
               </button>
@@ -259,7 +403,7 @@ export default function App() {
                   setBoardName(e.target.value);
                   if (nameError) setNameError("");
                 }}
-                placeholder="e.g., The Fellowship of Focus"
+                placeholder="e.g. The Fellowship of Focus"
                 className="flex-1 px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none focus:ring-2 focus:ring-emerald-600"
               />
               <button
@@ -286,26 +430,12 @@ export default function App() {
           </section>
         )}
 
-        {/* Step 2.5 — Create first task (full mini form) */}
         {step === 25 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 shadow space-y-4">
-            <div className="flex items-center gap-3">
-              <button
-                className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
-                onClick={() => setStep(2)}
-                title="Back"
-                aria-label="Back"
-              >
-                ←
-              </button>
-              <h2 className="text-xl font-semibold m-0">
-                Create your first task
-              </h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <h2 className="text-xl font-semibold">Create your first task</h2>
+            <div className="flex gap-2">
               <input
-                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
+                className="flex-1 px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
                 placeholder="Task title"
                 value={firstTask.title}
                 onChange={(e) =>
@@ -313,15 +443,11 @@ export default function App() {
                 }
               />
               <div className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700">
-                <label className="text-xs block mb-1 text-neutral-400">
-                  Priority
-                </label>
                 <PriorityStars
                   value={firstTask.priority}
                   onChange={(v) => setFirstTask((t) => ({ ...t, priority: v }))}
                 />
               </div>
-
               <select
                 className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
                 value={firstTask.taskType}
@@ -329,10 +455,9 @@ export default function App() {
                   setFirstTask((t) => ({ ...t, taskType: e.target.value }))
                 }
               >
-                <option value="main">Main task</option>
-                <option value="sub">Sub task</option>
+                <option value="main">Main quest</option>
+                <option value="sub">Sub quest</option>
               </select>
-
               <select
                 className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
                 value={firstTask.icon}
@@ -366,14 +491,18 @@ export default function App() {
                 Skip
               </button>
               <button
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white"
+                className={`px-4 py-2 rounded-xl ${
+                  firstTask.title.trim()
+                    ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                    : "bg-neutral-800 border border-neutral-700 text-white/50 cursor-not-allowed"
+                }`}
                 disabled={!firstTask.title.trim()}
-                onClick={() => {
+                onClick={() =>
                   addDraftTaskToBoard({
                     ...firstTask,
                     title: firstTask.title.trim(),
-                  });
-                }}
+                  })
+                }
               >
                 Create & Continue
               </button>
@@ -381,92 +510,68 @@ export default function App() {
           </section>
         )}
 
-        {/* Step 3 — Boards */}
+        {/* Boards / Columns / Cards */}
         {step === 3 && (
-          <section className="space-y-6">
-            {boards.map((board, i) => (
-              <Board
-                key={board.id}
-                board={board}
-                index={i}
-                boards={boards}
-                setBoards={setBoards}
-                onPrintTask={printTask}
-                onOpenTask={(task, ctx) => {
-                  setModalMode("edit");
-                  setModalTask(task);
-                  setModalCtx(ctx);
-                  setModalOpen(true);
-                }}
-                onCreateTask={(ctx) => {
-                  setModalMode("create");
-                  setModalTask({
-                    id: `t-${Date.now()}`,
-                    title: "",
-                    notes: "",
-                    priority: 0,
-                    taskType: "sub",
-                    icon: "sword",
-                    patternSeed: Math.random().toString(36).slice(2, 8),
-                  });
-                  setModalCtx(ctx);
-                  setModalOpen(true);
-                }}
-                onUpdateTask={(boardId, colId, taskId, patch) =>
-                  updateTask(boardId, colId, taskId, patch)
-                }
-                onDeleteTask={(boardId, taskId) => deleteTask(boardId, taskId)}
-              />
-            ))}
-          </section>
+          <DragDropContext onDragEnd={onDragEnd}>
+            <Droppable droppableId="boards-root" type="BOARD">
+              {(provided) => (
+                <div
+                  ref={provided.innerRef}
+                  {...provided.droppableProps}
+                  className="flex flex-col gap-6"
+                >
+                  {boards.map((board, i) => (
+                    <Draggable
+                      key={board.id}
+                      draggableId={`board-${board.id}`}
+                      index={i}
+                    >
+                      {(dragProvided) => (
+                        <div
+                          ref={dragProvided.innerRef}
+                          {...dragProvided.draggableProps}
+                          style={{
+                            ...dragProvided.draggableProps.style,
+                            willChange: "transform",
+                          }}
+                        >
+                          <Board
+                            board={board}
+                            setBoards={setBoards}
+                            onCreateTask={createTask}
+                            onUpdateTask={updateTask}
+                            onDeleteTask={deleteTask}
+                            onPrintTask={printTaskCard}
+                            onRenameColumn={(bid, cid, name) =>
+                              setBoards((bs) =>
+                                bs.map((b) =>
+                                  b.id === bid
+                                    ? {
+                                        ...b,
+                                        columns: b.columns.map((c) =>
+                                          c.id === cid
+                                            ? { ...c, title: name }
+                                            : c
+                                        ),
+                                      }
+                                    : b
+                                )
+                              )
+                            }
+                            // drag handle is the whole header bar:
+                            boardDragHandleProps={dragProvided.dragHandleProps}
+                          />
+                        </div>
+                      )}
+                    </Draggable>
+                  ))}
+                  {provided.placeholder}
+                </div>
+              )}
+            </Droppable>
+          </DragDropContext>
         )}
       </main>
-
-      {/* Task Modal */}
-      <TaskModal
-        open={modalOpen}
-        task={modalTask}
-        mode={modalMode}
-        onClose={() => setModalOpen(false)}
-        onSave={(updated) => {
-          if (modalMode === "edit") {
-            const found = findTask(updated.id);
-            if (found)
-              updateTask(found.boardId, found.colId, updated.id, {
-                ...updated,
-              });
-          } else {
-            const { boardId, colId } = modalCtx || {};
-            if (!boardId || !colId) return setModalOpen(false);
-            setBoards((bs) =>
-              bs.map((b) =>
-                b.id === boardId
-                  ? {
-                      ...b,
-                      columns: b.columns.map((c) =>
-                        c.id === colId
-                          ? { ...c, cards: [{ ...updated }, ...c.cards] }
-                          : c
-                      ),
-                    }
-                  : b
-              )
-            );
-          }
-          setModalOpen(false);
-        }}
-        onDelete={(toDelete) => {
-          deleteTask(null, toDelete.id);
-          setModalOpen(false);
-        }}
-        onRerollPattern={(id) => {
-          const found = findTask(id);
-          if (found)
-            updateTask(found.boardId, found.colId, id, {
-              patternSeed: Math.random().toString(36).slice(2, 8),
-            });
-        }}
-      />
     </div>
   );
 }
