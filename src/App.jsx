@@ -1,32 +1,161 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { generateQuestBoardName } from "./utils/names";
 import Board from "./components/Board";
-import TaskModal from "./components/TaskModal";
 import PriorityStars from "./components/PriorityStars";
+import { DragDropContext } from "react-beautiful-dnd";
+import printTaskCard from "./utils/printTaskCard";
 
 export default function App() {
   // Wizard: 0 Welcome → 2 Name → 25 First Task → 3 Boards
   const [step, setStep] = useState(0);
   const [boardName, setBoardName] = useState("");
   const [nameError, setNameError] = useState("");
-
-  // Boards (start empty)
   const [boards, setBoards] = useState([]);
 
-  // Task modal
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState("edit"); // "edit" | "create"
-  const [modalTask, setModalTask] = useState(null);
-  const [modalCtx, setModalCtx] = useState(null); // { boardId, colId }
+  // ------- LocalStorage autosave + migration -------
+  const STORAGE_KEY = "orcganizer.boards.v2";
+  const LEGACY_KEYS = ["orcganizer.boards.v1"]; // we will read from these if present
+  const DATA_VERSION = 2;
+
+  // Normalize older shapes safely
+  const hydrateBoards = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    return arr.map((b) => ({
+      id: b.id ?? `b-${Math.random().toString(36).slice(2, 8)}`,
+      name: b.name ?? "Untitled board",
+      minimized: !!b.minimized,
+      columns: Array.isArray(b.columns)
+        ? b.columns.map((c, ci) => ({
+            id: c.id ?? `col-${ci + 1}`,
+            title: c.title ?? `Column ${ci + 1}`,
+            cards: Array.isArray(c.cards)
+              ? c.cards.map((t, ti) => ({
+                  id: t.id ?? `t-${Date.now()}-${ci}-${ti}`,
+                  title: t.title ?? "",
+                  notes: t.notes ?? "",
+                  priority: Number(t.priority ?? 0) || 0,
+                  taskType: t.taskType === "main" ? "main" : "sub",
+                  icon: typeof t.icon === "string" ? t.icon : "sword",
+                  patternSeed:
+                    t.patternSeed ?? Math.random().toString(36).slice(2, 8),
+                  minimized: !!t.minimized,
+                }))
+              : [],
+          }))
+        : [],
+    }));
+  };
+
+  // Load once on mount
+  useEffect(() => {
+    try {
+      let parsed = null;
+
+      // 1) Try current key
+      const rawV2 = localStorage.getItem(STORAGE_KEY);
+      if (rawV2) {
+        const obj = JSON.parse(rawV2);
+        if (obj && Array.isArray(obj.boards)) {
+          parsed = obj.boards;
+        }
+      }
+
+      // 2) Fallback to legacy keys (arrays)
+      if (!parsed) {
+        for (const k of LEGACY_KEYS) {
+          const rawLegacy = localStorage.getItem(k);
+          if (rawLegacy) {
+            const maybeArr = JSON.parse(rawLegacy);
+            if (Array.isArray(maybeArr)) {
+              parsed = maybeArr;
+              break;
+            }
+          }
+        }
+      }
+
+      if (parsed) {
+        const hydrated = hydrateBoards(parsed);
+        setBoards(hydrated);
+        if (hydrated.length) setStep(3);
+
+        // write back in new format so we consolidate to one key
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ version: DATA_VERSION, boards: hydrated })
+        );
+        // clean legacy
+        LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+      }
+    } catch (e) {
+      console.error("Failed to load boards from localStorage", e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Save on any change
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: DATA_VERSION, boards })
+      );
+    } catch (e) {
+      console.error("Failed to save boards to localStorage", e);
+    }
+  }, [boards]);
 
   // Step 2.5 (first task) local draft state
   const [firstTask, setFirstTask] = useState({
     title: "",
     notes: "",
     priority: 0,
-    taskType: "sub", // "main" | "sub"
+    taskType: "sub",
     icon: "sword",
   });
+
+  // UNDO snackbar for deletes
+  const [undo, setUndo] = useState(null); // { task, boardId, colId, index, timeoutId, expiresAt }
+
+  const scheduleUndo = useCallback(
+    (payload) => {
+      // clear existing
+      if (undo?.timeoutId) clearTimeout(undo.timeoutId);
+      const timeoutId = setTimeout(() => {
+        setUndo(null);
+      }, 8000);
+      setUndo({ ...payload, timeoutId, expiresAt: Date.now() + 8000 });
+    },
+    [undo]
+  );
+
+  const handleUndo = useCallback(() => {
+    if (!undo) return;
+    const { task, boardId, colId, index, timeoutId } = undo;
+    if (timeoutId) clearTimeout(timeoutId);
+    setBoards((bs) =>
+      bs.map((b) =>
+        b.id === boardId
+          ? {
+              ...b,
+              columns: b.columns.map((c) =>
+                c.id === colId
+                  ? {
+                      ...c,
+                      cards: [
+                        ...c.cards.slice(0, index),
+                        task,
+                        ...c.cards.slice(index),
+                      ],
+                    }
+                  : c
+              ),
+            }
+          : b
+      )
+    );
+    setUndo(null);
+  }, [undo]);
 
   /* ----------------------------- Wizard ----------------------------- */
   const handleGenerateName = () => {
@@ -54,27 +183,22 @@ export default function App() {
     setStep(25);
   };
 
-  // Overloaded: pass string/notes OR a full object
+  // Add first task then go to boards
   const addDraftTaskToBoard = (titleOrObj, notes = "") => {
-    if (!boards.length) {
-      setStep(3);
-      return;
-    }
-    const firstId = boards[0].id;
-
-    const fromObj =
-      typeof titleOrObj === "object"
-        ? titleOrObj
-        : {
-            title: titleOrObj,
-            notes,
-            priority: 0,
-            taskType: "sub",
-            icon: "sword",
-          };
-
-    setBoards((bs) =>
-      bs.map((b) => {
+    setBoards((bs) => {
+      if (!bs.length) return bs;
+      const fromObj =
+        typeof titleOrObj === "object"
+          ? titleOrObj
+          : {
+              title: titleOrObj,
+              notes,
+              priority: 0,
+              taskType: "sub",
+              icon: "sword",
+            };
+      const firstId = bs[0].id;
+      return bs.map((b) => {
         if (b.id !== firstId) return b;
         const t = {
           id: `t-${Date.now()}`,
@@ -91,24 +215,13 @@ export default function App() {
             c.id === "todo" ? { ...c, cards: [t, ...c.cards] } : c
           ),
         };
-      })
-    );
+      });
+    });
     setStep(3);
   };
 
   /* -------------------------- Task helpers -------------------------- */
-  function findTask(taskId) {
-    for (const b of boards) {
-      for (const c of b.columns) {
-        const t = c.cards.find((x) => x.id === taskId);
-        if (t) return { boardId: b.id, colId: c.id, task: t };
-      }
-    }
-    return null;
-  }
-
-  // ✅ Updater merges task fields
-  function updateTask(boardId, colId, taskId, updater) {
+  const updateTask = useCallback((boardId, colId, taskId, updater) => {
     setBoards((bs) =>
       bs.map((b) => {
         if (b.id !== boardId) return b;
@@ -127,52 +240,123 @@ export default function App() {
         return { ...b, columns };
       })
     );
-  }
+  }, []);
 
-  function deleteTask(boardId, taskId) {
+  const createTask = useCallback(({ boardId, colId }) => {
     setBoards((bs) =>
-      bs.map((b) => ({
-        ...b,
-        columns: b.columns.map((c) => ({
-          ...c,
-          cards: c.cards.filter((t) => t.id !== taskId),
-        })),
-      }))
+      bs.map((b) =>
+        b.id === boardId
+          ? {
+              ...b,
+              columns: b.columns.map((c) =>
+                c.id === colId
+                  ? {
+                      ...c,
+                      cards: [
+                        {
+                          id: `t-${Date.now()}`,
+                          title: "New task",
+                          notes: "",
+                          priority: 0,
+                          taskType: "sub",
+                          icon: "sword",
+                          patternSeed: Math.random().toString(36).slice(2, 8),
+                        },
+                        ...c.cards,
+                      ],
+                    }
+                  : c
+              ),
+            }
+          : b
+      )
     );
-  }
+  }, []);
 
-  /* -------------------------- Print single -------------------------- */
-  function printTask(task) {
-    const esc = (s) =>
-      String(s).replace(
-        /[&<>"']/g,
-        (c) =>
-          ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            '"': "&quot;",
-            "'": "&#39;",
-          }[c])
+  const deleteTask = useCallback(
+    (boardId, colId, taskId, indexHint) => {
+      setBoards((bs) => {
+        let deleted = null;
+        const next = bs.map((b) => {
+          if (b.id !== boardId) return b;
+          const cols = b.columns.map((c) => {
+            if (c.id !== colId) return c;
+            const idx = indexHint ?? c.cards.findIndex((t) => t.id === taskId);
+            if (idx >= 0) deleted = c.cards[idx];
+            return { ...c, cards: c.cards.filter((t) => t.id !== taskId) };
+          });
+          return { ...b, columns: cols };
+        });
+        if (deleted)
+          scheduleUndo({
+            task: deleted,
+            boardId,
+            colId,
+            index: indexHint ?? 0,
+          });
+        return next;
+      });
+    },
+    [scheduleUndo]
+  );
+
+  /* -------------------------- Global DnD --------------------------- */
+  const onDragEnd = ({ source, destination, type }) => {
+    if (!destination) return;
+
+    if (type === "COLUMN") {
+      const fromBoardId = String(source.droppableId).replace("cols-", "");
+      const toBoardId = String(destination.droppableId).replace("cols-", "");
+      if (fromBoardId !== toBoardId) return;
+      setBoards((bs) =>
+        bs.map((b) => {
+          if (b.id !== fromBoardId) return b;
+          const cols = Array.from(b.columns);
+          const [moved] = cols.splice(source.index, 1);
+          cols.splice(destination.index, 0, moved);
+          return { ...b, columns: cols };
+        })
       );
-    const html = `<!doctype html>
-<html><head><meta charset="utf-8"/><title>Print Task</title>
-<style>
-  @page { margin: 16mm; } body { font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:#0a0a0a; }
-  h1 { margin:0 0 8px; font-size:28px; } .notes{white-space:pre-wrap;}
-</style></head><body>
-  <h1>${esc(task.title || "Task")}</h1>
-  <div>Priority: ${task.priority || 0} / 5</div>
-  ${task.notes ? `<div class="notes">${esc(task.notes)}</div>` : ""}
-  <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();};</script>
-</body></html>`;
-    const w = window.open("", "_blank", "noopener,noreferrer");
-    if (w) {
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
+      return;
     }
-  }
+
+    if (type === "CARD") {
+      const [fromBoardId, fromColId] = String(source.droppableId).split(":");
+      const [toBoardId, toColId] = String(destination.droppableId).split(":");
+      setBoards((bs) => {
+        const next = bs.map((b) => ({
+          ...b,
+          columns: b.columns.map((c) => ({ ...c, cards: [...c.cards] })),
+        }));
+        const fromBoard = next.find((b) => b.id === fromBoardId);
+        const toBoard = next.find((b) => b.id === toBoardId);
+        if (!fromBoard || !toBoard) return bs;
+        const fromCol = fromBoard.columns.find((c) => c.id === fromColId);
+        const toCol = toBoard.columns.find((c) => c.id === toColId);
+        if (!fromCol || !toCol) return bs;
+        const [movedCard] = fromCol.cards.splice(source.index, 1);
+        toCol.cards.splice(destination.index, 0, movedCard);
+        return next;
+      });
+    }
+  };
+
+  // ------------------------------ Reset ------------------------------
+  const resetAll = () => {
+    const ok = window.confirm(
+      "Reset all boards & quests? This will permanently delete your local data."
+    );
+    if (!ok) return;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+    } catch {}
+    setBoards([]);
+    setBoardName("");
+    setNameError("");
+    setUndo(null);
+    setStep(0);
+  };
 
   /* -------------------------------- UI -------------------------------- */
   return (
@@ -211,6 +395,13 @@ export default function App() {
           >
             New Board
           </button>
+          <button
+            onClick={resetAll}
+            className="px-3 py-2 rounded-lg bg-red-700 hover:bg-red-600 text-white"
+            title="Clear all saved boards & quests from this browser"
+          >
+            Reset Data
+          </button>
         </div>
       </header>
 
@@ -235,7 +426,7 @@ export default function App() {
           </section>
         )}
 
-        {/* Step 2 — Name board (with Back) */}
+        {/* Step 2 — Name board */}
         {step === 2 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 shadow space-y-4">
             <div className="flex items-center gap-3">
@@ -252,7 +443,8 @@ export default function App() {
               </h2>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
+              {/* 50% smaller input */}
               <input
                 value={boardName}
                 onChange={(e) => {
@@ -260,7 +452,7 @@ export default function App() {
                   if (nameError) setNameError("");
                 }}
                 placeholder="e.g., The Fellowship of Focus"
-                className="flex-1 px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none focus:ring-2 focus:ring-emerald-600"
+                className="w-1/2 px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none focus:ring-2 focus:ring-emerald-600"
               />
               <button
                 onClick={handleGenerateName}
@@ -269,7 +461,9 @@ export default function App() {
                 Generate Quest board name
               </button>
             </div>
+
             {nameError && <p className="text-red-400 text-sm">{nameError}</p>}
+
             <div className="flex gap-2">
               <button
                 onClick={handleForge}
@@ -277,7 +471,7 @@ export default function App() {
                 className={`px-4 py-2 rounded-xl font-medium shadow ${
                   boardName.trim()
                     ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-                    : "bg-neutral-800 cursor-not-allowed border border-neutral-700"
+                    : "bg-neutral-800 cursor-not-allowed border border-neutral-700 text-white/50"
                 }`}
               >
                 Forge Quest board
@@ -286,7 +480,7 @@ export default function App() {
           </section>
         )}
 
-        {/* Step 2.5 — Create first task (full mini form) */}
+        {/* Step 2.5 — Create first task */}
         {step === 25 && (
           <section className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 shadow space-y-4">
             <div className="flex items-center gap-3">
@@ -321,7 +515,6 @@ export default function App() {
                   onChange={(v) => setFirstTask((t) => ({ ...t, priority: v }))}
                 />
               </div>
-
               <select
                 className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
                 value={firstTask.taskType}
@@ -329,10 +522,9 @@ export default function App() {
                   setFirstTask((t) => ({ ...t, taskType: e.target.value }))
                 }
               >
-                <option value="main">Main task</option>
-                <option value="sub">Sub task</option>
+                <option value="main">Main quest</option>
+                <option value="sub">Sub quest</option>
               </select>
-
               <select
                 className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 outline-none"
                 value={firstTask.icon}
@@ -366,14 +558,18 @@ export default function App() {
                 Skip
               </button>
               <button
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white"
+                className={`px-4 py-2 rounded-xl ${
+                  firstTask.title.trim()
+                    ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                    : "bg-neutral-800 border border-neutral-700 text-white/50 cursor-not-allowed"
+                }`}
                 disabled={!firstTask.title.trim()}
-                onClick={() => {
+                onClick={() =>
                   addDraftTaskToBoard({
                     ...firstTask,
                     title: firstTask.title.trim(),
-                  });
-                }}
+                  })
+                }
               >
                 Create & Continue
               </button>
@@ -383,90 +579,48 @@ export default function App() {
 
         {/* Step 3 — Boards */}
         {step === 3 && (
-          <section className="space-y-6">
-            {boards.map((board, i) => (
-              <Board
-                key={board.id}
-                board={board}
-                index={i}
-                boards={boards}
-                setBoards={setBoards}
-                onPrintTask={printTask}
-                onOpenTask={(task, ctx) => {
-                  setModalMode("edit");
-                  setModalTask(task);
-                  setModalCtx(ctx);
-                  setModalOpen(true);
-                }}
-                onCreateTask={(ctx) => {
-                  setModalMode("create");
-                  setModalTask({
-                    id: `t-${Date.now()}`,
-                    title: "",
-                    notes: "",
-                    priority: 0,
-                    taskType: "sub",
-                    icon: "sword",
-                    patternSeed: Math.random().toString(36).slice(2, 8),
-                  });
-                  setModalCtx(ctx);
-                  setModalOpen(true);
-                }}
-                onUpdateTask={(boardId, colId, taskId, patch) =>
-                  updateTask(boardId, colId, taskId, patch)
-                }
-                onDeleteTask={(boardId, taskId) => deleteTask(boardId, taskId)}
-              />
-            ))}
-          </section>
+          <DragDropContext onDragEnd={onDragEnd}>
+            <section className="space-y-6">
+              {boards.length === 0 ? (
+                <div className="rounded-ticket border border-neutral-800 bg-neutral-900/80 p-6 text-center text-neutral-300">
+                  No boards yet. Click{" "}
+                  <span className="text-white font-semibold">New Board</span>{" "}
+                  above or go back and Forge your first quest board.
+                </div>
+              ) : (
+                boards.map((board, i) => (
+                  <Board
+                    key={board.id}
+                    board={board}
+                    index={i}
+                    boards={boards}
+                    setBoards={setBoards}
+                    onCreateTask={createTask}
+                    onUpdateTask={updateTask}
+                    onDeleteTask={deleteTask}
+                    onPrintTask={printTaskCard}
+                  />
+                ))
+              )}
+            </section>
+          </DragDropContext>
         )}
       </main>
 
-      {/* Task Modal */}
-      <TaskModal
-        open={modalOpen}
-        task={modalTask}
-        mode={modalMode}
-        onClose={() => setModalOpen(false)}
-        onSave={(updated) => {
-          if (modalMode === "edit") {
-            const found = findTask(updated.id);
-            if (found)
-              updateTask(found.boardId, found.colId, updated.id, {
-                ...updated,
-              });
-          } else {
-            const { boardId, colId } = modalCtx || {};
-            if (!boardId || !colId) return setModalOpen(false);
-            setBoards((bs) =>
-              bs.map((b) =>
-                b.id === boardId
-                  ? {
-                      ...b,
-                      columns: b.columns.map((c) =>
-                        c.id === colId
-                          ? { ...c, cards: [{ ...updated }, ...c.cards] }
-                          : c
-                      ),
-                    }
-                  : b
-              )
-            );
-          }
-          setModalOpen(false);
-        }}
-        onDelete={(toDelete) => {
-          deleteTask(null, toDelete.id);
-          setModalOpen(false);
-        }}
-        onRerollPattern={(id) => {
-          const found = findTask(id);
-          if (found)
-            updateTask(found.boardId, found.colId, id, {
-              patternSeed: Math.random().toString(36).slice(2, 8),
-            });
-        }}
-      />
+      {/* UNDO snackbar */}
+      {undo && (
+        <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[120]">
+          <div className="px-4 py-3 rounded-xl bg-neutral-900 text-white border border-neutral-700 shadow-lg flex items-center gap-3">
+            <span>Task deleted.</span>
+            <button
+              className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-sm"
+              onClick={handleUndo}
+            >
+              Undo
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

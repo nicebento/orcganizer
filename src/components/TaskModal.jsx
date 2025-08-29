@@ -80,8 +80,8 @@ export default function TaskModal({
                   setLocal({ ...local, taskType: e.target.value })
                 }
               >
-                <option value="main">Main task</option>
-                <option value="sub">Sub task</option>
+                <option value="main">Main quest</option>
+                <option value="sub">Sub quest</option>
               </select>
             </label>
 
