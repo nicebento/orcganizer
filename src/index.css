@@ -2,68 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
-/* App baseline */
+/* ---------------------- App baseline ---------------------- */
 :root {
   color-scheme: dark;
+
+  /* Global header height (already used in App.jsx) */
+  --global-header-h: 64px;
+
+  /* 🔹 Unified corner radius for boards, columns, tasks */
+  --radius-ticket: 14px;
 }
+
 html,
 body,
 #root {
   height: 100%;
 }
+
 body {
   @apply bg-neutral-950 text-neutral-100 antialiased;
   margin: 0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue",
-    Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 }
 
-/* Custom tokens used by components */
+/* ---------------------- Reusable tokens ---------------------- */
+/* Use this class on any container that should share the same rounding.
+   We set overflow: hidden so colored headers/sections clip perfectly. */
 .rounded-ticket {
-  @apply rounded-[18px];
+  border-radius: var(--radius-ticket);
+  overflow: hidden;
 }
 
-/* Scroll area cosmetics for columns row */
-::-webkit-scrollbar {
-  height: 10px;
-  width: 10px;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(120, 120, 120, 0.35);
-  border-radius: 999px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
+/* Optional: consistent small rounding for inner buttons on tickets */
+.ticket-btn {
+  border-radius: calc(var(--radius-ticket) - 8px);
 }
 
-/* Buttons look a tad nicer by default */
-button {
-  cursor: pointer;
+/* ---------------------- Printing polish ---------------------- */
+@media print {
+  /* Make on-screen colors match output as closely as possible */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Remove heavy shadows in print for crisp edges */
+  .rounded-ticket {
+    box-shadow: none !important;
+    border-color: #333 !important; /* subtle border that prints well */
+    border-style: solid;
+  }
 }
 
-/* Make sure no ancestor applies transforms that offset the drag layer */
-#root,
-body,
-html {
-  height: 100%;
+/* ---------------------- Utility niceties ---------------------- */
+/* Better focus outline inside dark UI when using native inputs */
+input:focus,
+textarea:focus,
+button:focus {
+  outline: 0;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.4); /* emerald-ish ring */
 }
 
-/* Optional: prevent weird cursor lag by avoiding transform on the dragging clone */
-.rbd-dragging {
-  transform: none !important;
-} /* use sparingly */
-
-html,
-body,
-#root {
-  height: 100%;
+/* Allow text selection in content but keep headers “feel” tidy */
+[data-card] ::selection {
+  background: rgba(16, 185, 129, 0.35);
+  color: #fff;
 }
 
-:root {
-  --global-header-h: 64px; /* tweak if you want the header taller/shorter */
-}
-html,
-body,
-#root {
-  height: 100%;
+/* If you ever need a hard no-wrap helper */
+.nowrap {
+  white-space: nowrap;
 }
